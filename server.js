@@ -15,7 +15,6 @@ const allowedUser = 'U01F9QU9JLD'; // your Slack admin ID
 
 const messageCounts = {}; // { userId: { total: X, channels: { channelId: count } } }
 
-// Helper to count messages
 function incrementMessage(userId, channelId) {
   if (!messageCounts[userId]) {
     messageCounts[userId] = { total: 0, channels: {} };
@@ -27,7 +26,6 @@ function incrementMessage(userId, channelId) {
   messageCounts[userId].channels[channelId] += 1;
 }
 
-// Real-time message tracking
 app.event('message', async ({ event }) => {
   if (!event.bot_id && event.user && event.channel) {
     incrementMessage(event.user, event.channel);
@@ -35,7 +33,7 @@ app.event('message', async ({ event }) => {
   }
 });
 
-// /leaderboard – global top 100 users
+// /leaderboard – top 100 globally
 app.command('/leaderboard', async ({ command, ack, respond }) => {
   await ack();
   if (command.user_id !== allowedUser) {
@@ -59,7 +57,7 @@ app.command('/leaderboard', async ({ command, ack, respond }) => {
   await respond(`🏆 *Top 100 Most Active Members:*\n${leaderboard}`);
 });
 
-// /leaderboard_channel – top 100 in current channel
+// /leaderboard_channel – top 100 in the current channel
 app.command('/leaderboard_channel', async ({ command, ack, respond }) => {
   await ack();
   if (command.user_id !== allowedUser) {
@@ -90,7 +88,7 @@ app.command('/leaderboard_channel', async ({ command, ack, respond }) => {
   await respond(`🏆 *Top 100 Members in <#${channelId}>:*\n${text}`);
 });
 
-// /backfill – fetch last 90 days of messages from all public channels
+// /backfill – fetch last 90 days from all public channels
 app.command('/backfill', async ({ command, ack, respond, client }) => {
   await ack();
   if (command.user_id !== allowedUser) {
@@ -114,8 +112,20 @@ app.command('/backfill', async ({ command, ack, respond, client }) => {
     for (const channel of channels) {
       try {
         await client.conversations.join({ channel: channel.id });
-      } catch (joinErr) {
-        console.log(`⚠️ Could not join channel ${channel.name}:`, joinErr.data?.error);
+      } catch (err) {
+        console.log(`⚠️ Could not join ${channel.name}: ${err.data?.error}`);
+      }
+
+      // Check if bot is a member
+      try {
+        const members = await client.conversations.members({ channel: channel.id });
+        if (!members.members.includes(process.env.BOT_USER_ID)) {
+          console.log(`⏭️ Skipping ${channel.name} — bot not in channel`);
+          continue;
+        }
+      } catch (err) {
+        console.log(`⚠️ Could not fetch members of ${channel.name}: ${err.data?.error}`);
+        continue;
       }
 
       let hasMore = true;
@@ -148,7 +158,7 @@ app.command('/backfill', async ({ command, ack, respond, client }) => {
   }
 });
 
-// Start the bot
+// Start bot
 (async () => {
   const port = process.env.PORT || 3000;
   await app.start(port);
