@@ -1,50 +1,43 @@
 const { App, ExpressReceiver } = require('@slack/bolt');
 require('dotenv').config();
 
-// Receiver setup
+const axios = require('axios');
+
 const receiver = new ExpressReceiver({
   signingSecret: process.env.SLACK_SIGNING_SECRET,
   endpoints: '/slack/events'
 });
 
-// App setup
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
   receiver
 });
 
-// Admin ID
-const allowedUser = 'U01F9QU9JLD';
-
-// In-memory message store
+const allowedUser = 'U01F9QU9JLD'; // your admin ID
 const messageCounts = {}; // { userId: { total: X, channels: { channelId: count } } }
 
-// Track messages in all public channels
+// Real-time message tracker
 app.event('message', async ({ event }) => {
   if (!event.bot_id && event.user && event.channel) {
-    const userId = event.user;
-    const channelId = event.channel;
-
-    if (!messageCounts[userId]) {
-      messageCounts[userId] = { total: 0, channels: {} };
-    }
-
-    messageCounts[userId].total += 1;
-
-    if (!messageCounts[userId].channels[channelId]) {
-      messageCounts[userId].channels[channelId] = 0;
-    }
-
-    messageCounts[userId].channels[channelId] += 1;
-
-    console.log(`📨 ${userId} sent a message in ${channelId}. Total: ${messageCounts[userId].total}`);
+    incrementMessage(event.user, event.channel);
   }
 });
 
-// Slash command: /leaderboard (global top 100)
+// Helper: count messages
+function incrementMessage(userId, channelId) {
+  if (!messageCounts[userId]) {
+    messageCounts[userId] = { total: 0, channels: {} };
+  }
+  messageCounts[userId].total += 1;
+  if (!messageCounts[userId].channels[channelId]) {
+    messageCounts[userId].channels[channelId] = 0;
+  }
+  messageCounts[userId].channels[channelId] += 1;
+}
+
+// /leaderboard (global top 100)
 app.command('/leaderboard', async ({ command, ack, respond }) => {
   await ack();
-
   if (command.user_id !== allowedUser) {
     await respond("⛔ This command is only available to admins.");
     return;
@@ -66,10 +59,9 @@ app.command('/leaderboard', async ({ command, ack, respond }) => {
   await respond(`🏆 *Top 100 Most Active Members:*\n${leaderboard}`);
 });
 
-// Slash command: /leaderboard_channel (top 100 in current channel)
+// /leaderboard_channel (top 100 per channel)
 app.command('/leaderboard_channel', async ({ command, ack, respond }) => {
   await ack();
-
   if (command.user_id !== allowedUser) {
     await respond("⛔ This command is only available to admins.");
     return;
@@ -98,7 +90,56 @@ app.command('/leaderboard_channel', async ({ command, ack, respond }) => {
   await respond(`🏆 *Top 100 Members in <#${channelId}>:*\n${text}`);
 });
 
-// Start the bot
+// /backfill (fetch last 90 days)
+app.command('/backfill', async ({ command, ack, respond, client }) => {
+  await ack();
+  if (command.user_id !== allowedUser) {
+    await respond("⛔ This command is only available to admins.");
+    return;
+  }
+
+  await respond("📦 Backfilling messages... this may take a moment.");
+
+  const now = Math.floor(Date.now() / 1000);
+  const oldest = now - 90 * 24 * 60 * 60;
+
+  try {
+    // Get all public channels
+    const channelsList = await client.conversations.list({ types: 'public_channel', limit: 1000 });
+    const channels = channelsList.channels || [];
+
+    for (const channel of channels) {
+      let hasMore = true;
+      let cursor = undefined;
+
+      while (hasMore) {
+        const history = await client.conversations.history({
+          channel: channel.id,
+          oldest,
+          limit: 200,
+          cursor
+        });
+
+        const messages = history.messages || [];
+        for (const msg of messages) {
+          if (msg.user && !msg.bot_id) {
+            incrementMessage(msg.user, channel.id);
+          }
+        }
+
+        hasMore = history.has_more;
+        cursor = history.response_metadata?.next_cursor;
+      }
+    }
+
+    await respond("✅ Backfill complete. Messages from the last 90 days have been counted.");
+  } catch (err) {
+    console.error("Backfill error:", err);
+    await respond("❌ Backfill failed. Check the logs for details.");
+  }
+});
+
+// Start server
 (async () => {
   const port = process.env.PORT || 3000;
   await app.start(port);
