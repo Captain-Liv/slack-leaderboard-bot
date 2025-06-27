@@ -1,0 +1,13 @@
+{
+  "name": "slack-message-counter",
+  "version": "1.0.0",
+  "description": "Tracks message counts by user in public Slack channels",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@slack/bolt": "2.5.0",
+    "dotenv": "^16.0.3"
+  }
+}
