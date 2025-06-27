@@ -1,8 +1,6 @@
 const { App, ExpressReceiver } = require('@slack/bolt');
 require('dotenv').config();
 
-const axios = require('axios');
-
 const receiver = new ExpressReceiver({
   signingSecret: process.env.SLACK_SIGNING_SECRET,
   endpoints: '/slack/events'
@@ -13,17 +11,11 @@ const app = new App({
   receiver
 });
 
-const allowedUser = 'U01F9QU9JLD'; // your admin ID
+const allowedUser = 'U01F9QU9JLD'; // your Slack admin ID
+
 const messageCounts = {}; // { userId: { total: X, channels: { channelId: count } } }
 
-// Real-time message tracker
-app.event('message', async ({ event }) => {
-  if (!event.bot_id && event.user && event.channel) {
-    incrementMessage(event.user, event.channel);
-  }
-});
-
-// Helper: count messages
+// Helper to count messages
 function incrementMessage(userId, channelId) {
   if (!messageCounts[userId]) {
     messageCounts[userId] = { total: 0, channels: {} };
@@ -35,7 +27,15 @@ function incrementMessage(userId, channelId) {
   messageCounts[userId].channels[channelId] += 1;
 }
 
-// /leaderboard (global top 100)
+// Real-time message tracking
+app.event('message', async ({ event }) => {
+  if (!event.bot_id && event.user && event.channel) {
+    incrementMessage(event.user, event.channel);
+    console.log(`📨 ${event.user} sent a message in ${event.channel}`);
+  }
+});
+
+// /leaderboard – global top 100 users
 app.command('/leaderboard', async ({ command, ack, respond }) => {
   await ack();
   if (command.user_id !== allowedUser) {
@@ -59,7 +59,7 @@ app.command('/leaderboard', async ({ command, ack, respond }) => {
   await respond(`🏆 *Top 100 Most Active Members:*\n${leaderboard}`);
 });
 
-// /leaderboard_channel (top 100 per channel)
+// /leaderboard_channel – top 100 in current channel
 app.command('/leaderboard_channel', async ({ command, ack, respond }) => {
   await ack();
   if (command.user_id !== allowedUser) {
@@ -90,7 +90,7 @@ app.command('/leaderboard_channel', async ({ command, ack, respond }) => {
   await respond(`🏆 *Top 100 Members in <#${channelId}>:*\n${text}`);
 });
 
-// /backfill (fetch last 90 days)
+// /backfill – fetch last 90 days of messages from all public channels
 app.command('/backfill', async ({ command, ack, respond, client }) => {
   await ack();
   if (command.user_id !== allowedUser) {
@@ -98,17 +98,26 @@ app.command('/backfill', async ({ command, ack, respond, client }) => {
     return;
   }
 
-  await respond("📦 Backfilling messages... this may take a moment.");
+  await respond("📦 Backfilling messages... this may take a few minutes.");
 
   const now = Math.floor(Date.now() / 1000);
   const oldest = now - 90 * 24 * 60 * 60;
 
   try {
-    // Get all public channels
-    const channelsList = await client.conversations.list({ types: 'public_channel', limit: 1000 });
+    const channelsList = await client.conversations.list({
+      types: 'public_channel',
+      limit: 1000
+    });
+
     const channels = channelsList.channels || [];
 
     for (const channel of channels) {
+      try {
+        await client.conversations.join({ channel: channel.id });
+      } catch (joinErr) {
+        console.log(`⚠️ Could not join channel ${channel.name}:`, joinErr.data?.error);
+      }
+
       let hasMore = true;
       let cursor = undefined;
 
@@ -139,7 +148,7 @@ app.command('/backfill', async ({ command, ack, respond, client }) => {
   }
 });
 
-// Start server
+// Start the bot
 (async () => {
   const port = process.env.PORT || 3000;
   await app.start(port);
